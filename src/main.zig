@@ -1,4 +1,5 @@
 const std = @import("std");
+const BitReader = @import("bit_reader.zig").BitReader();
 
 const UserCmdInfo = struct {
     tick_count: i32,
@@ -10,49 +11,50 @@ const UserCmdInfo = struct {
 };
 
 fn parseUserCmdInfo(buf: []const u8, prev: UserCmdInfo) !UserCmdInfo {
-    var stream = std.io.fixedBufferStream(buf);
-    var br = std.io.bitReader(.Little, stream.reader());
+    const stream: std.Io.Reader = .fixed(buf);
+
+    var br: BitReader = .{ .reader = stream };
 
     var info = prev;
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        _ = try br.reader().readIntLittle(i32); // CommandNumber
+    if (1 == try br.readBits(u1, 1)) {
+        _ = try br.readBits(i32, 32); // CommandNumber
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.tick_count = try br.reader().readIntLittle(i32);
+    if (1 == try br.readBits(u1, 1)) {
+        info.tick_count = try br.readBits(i32, 32);
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.view_angles[0] = @bitCast(f32, try br.reader().readIntLittle(i32));
+    if (1 == try br.readBits(u1, 1)) {
+        info.view_angles[0] = @bitCast(try br.readBits(i32, 32));
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.view_angles[1] = @bitCast(f32, try br.reader().readIntLittle(i32));
+    if (1 == try br.readBits(u1, 1)) {
+        info.view_angles[1] = @bitCast(try br.readBits(i32, 32));
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.view_angles[2] = @bitCast(f32, try br.reader().readIntLittle(i32));
+    if (1 == try br.readBits(u1, 1)) {
+        info.view_angles[2] = @bitCast(try br.readBits(i32, 32));
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.forwardmove = @bitCast(f32, try br.reader().readIntLittle(i32));
+    if (1 == try br.readBits(u1, 1)) {
+        info.forwardmove = @bitCast(try br.readBits(i32, 32));
     } else {
         info.forwardmove = 0;
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.sidemove = @bitCast(f32, try br.reader().readIntLittle(i32));
+    if (1 == try br.readBits(u1, 1)) {
+        info.sidemove = @bitCast(try br.readBits(i32, 32));
     } else {
         info.sidemove = 0;
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        _ = @bitCast(f32, try br.reader().readIntLittle(i32)); // UpMove
+    if (1 == try br.readBits(u1, 1)) {
+        _ = try br.readBits(i32, 32); // UpMove
     }
 
-    if (1 == try br.readBitsNoEof(u1, 1)) {
-        info.buttons = try br.reader().readIntLittle(u32);
+    if (1 == try br.readBits(u1, 1)) {
+        info.buttons = try br.readBits(u32, 32);
     } else {
         info.buttons = 0;
     }
@@ -60,20 +62,21 @@ fn parseUserCmdInfo(buf: []const u8, prev: UserCmdInfo) !UserCmdInfo {
     return info;
 }
 
-pub fn convert(r: anytype, w: anytype) !void {
-    if (!try r.isBytes("HL2DEMO\x00")) return error.BadDemo; // DemoFileStamp
-    if (4 != try r.readIntLittle(i32)) return error.BadDemo; // DemoProtocol
-    try r.skipBytes(4, .{}); // NetworkProtocol
-    try r.skipBytes(260, .{}); // ServerName
-    try r.skipBytes(260, .{}); // ClientName
-    const map_name = try r.readBytesNoEof(260);
-    try r.skipBytes(260, .{}); // GameDirectory
-    try r.skipBytes(4, .{}); // PlaybackTime
-    try r.skipBytes(4, .{}); // PlaybackTicks
-    try r.skipBytes(4, .{}); // PlaybackFrames
-    try r.skipBytes(4, .{}); // SignOnLength
+pub fn convert(file_name: []const u8, r: *std.Io.Reader, w: *std.Io.Writer) !void {
+    if (!std.mem.eql(u8, try r.take(8), "HL2DEMO\x00")) return error.BadDemo;
+    if (4 != try r.takeInt(i32, .little)) return error.BadDemo; // DemoProtocol
+    try r.discardAll(4); // NetworkProtocol
+    try r.discardAll(260); // ServerName
+    try r.discardAll(260); // ClientName
+    const map_name = try r.take(260);
+    try r.discardAll(260); // GameDirectory
+    try r.discardAll(4); // PlaybackTime
+    try r.discardAll(4); // PlaybackTicks
+    try r.discardAll(4); // PlaybackFrames
+    try r.discardAll(4); // SignOnLength
 
-    try w.print("start map {s}\n", .{std.mem.sliceTo(&map_name, 0)});
+    try w.print("version 1\n", .{});
+    try w.print("start map {s}\n", .{std.mem.sliceTo(map_name, 0)});
     try w.print("0>\n", .{});
 
     var last_tick: i32 = 0;
@@ -87,43 +90,41 @@ pub fn convert(r: anytype, w: anytype) !void {
     };
 
     while (true) {
-        const msg = r.readIntLittle(u8) catch |err| switch (err) {
+        const msg = r.takeInt(u8, .little) catch |err| switch (err) {
             error.EndOfStream => break,
             else => |e| return e,
         };
 
-        const tick = try r.readIntLittle(i32);
-        const slot = try r.readIntLittle(u8);
+        const tick = try r.takeInt(i32, .little);
+        const slot = try r.takeInt(u8, .little);
 
         _ = slot;
 
         switch (msg) {
             1, 2 => { // SignOn/Packet
-                try r.skipBytes(76 * 2, .{}); // PacketInfo
-                try r.skipBytes(4, .{}); // InSequence
-                try r.skipBytes(4, .{}); // OutSequence
-                const size = try r.readIntLittle(u32);
-                try r.skipBytes(size, .{}); // Data
+                try r.discardAll(76 * 2); // PacketInfo
+                try r.discardAll(4); // InSequence
+                try r.discardAll(4); // OutSequence
+                const size = try r.takeInt(u32, .little);
+                try r.discardAll(size); // Data
             },
             3 => {}, // SyncTick
             4 => { // ConsoleCmd
-                const size = try r.readIntLittle(u32);
-                try r.skipBytes(size, .{}); // Data
+                const size = try r.takeInt(u32, .little);
+                try r.discardAll(size); // Data
             },
             5 => { // UserCmd
-                try r.skipBytes(4, .{}); // Cmd
-                const size = try r.readIntLittle(u32);
+                try r.discardAll(4); // Cmd
+                const size = try r.takeInt(u32, .little);
 
                 if (tick <= last_tick) {
                     // skip this one
-                    try r.skipBytes(size, .{});
+                    try r.discardAll(size);
                 } else {
                     // try and parse it
 
-                    var buf: [64]u8 = undefined;
-                    try r.readNoEof(buf[0..size]);
-
-                    const info = try parseUserCmdInfo(buf[0..size], last_cmd_info);
+                    const buf = try r.take(size);
+                    const info = try parseUserCmdInfo(buf, last_cmd_info);
 
                     if (last_tick == 0) {
                         last_cmd_info.view_angles = info.view_angles;
@@ -134,7 +135,7 @@ pub fn convert(r: anytype, w: anytype) !void {
                     const buttons_mask = [6]u32{ 1 << 1, 1 << 2, 1 << 5, 1 << 19, 1 << 0, 1 << 11 };
 
                     var buttons: [6]u8 = undefined;
-                    for (buttons) |*b, i| {
+                    for (&buttons, 0..6) |*b, i| {
                         b.* = if ((buttons_mask[i] & info.buttons) != 0)
                             buttons_on[i]
                         else
@@ -155,38 +156,68 @@ pub fn convert(r: anytype, w: anytype) !void {
                 }
             },
             6 => { // DataTables
-                const size = try r.readIntLittle(u32);
-                try r.skipBytes(size, .{}); // Data
+                const size = try r.takeInt(u32, .little);
+                try r.discardAll(size); // Data
             },
             7 => { // Stop
-                std.log.info("Reached stop message at tick {}", .{tick});
+                std.log.info("Demo \"{s}\" ended after parsing {} ticks.", .{ file_name, tick });
                 break;
             },
             8 => { // CustomData
-                try r.skipBytes(4, .{}); // Type
-                const size = try r.readIntLittle(u32);
-                try r.skipBytes(size, .{}); // Data
+                try r.discardAll(4); // Type
+                const size = try r.takeInt(u32, .little);
+                try r.discardAll(size); // Data
             },
             9 => { // StringTables
-                const size = try r.readIntLittle(u32);
-                try r.skipBytes(size, .{}); // Data
+                const size = try r.takeInt(u32, .little);
+                try r.discardAll(size); // Data
             },
             else => return error.BadDemo,
         }
     }
 }
 
-pub fn main() anyerror!void {
-    var dem = try std.fs.cwd().openFile("demo.dem", .{});
-    defer dem.close();
+pub fn main(init: std.process.Init) anyerror!void {
+    const gpa = init.gpa;
+    const io = init.io;
 
-    var tas = try std.fs.cwd().createFile("tas.p2tas", .{});
-    defer tas.close();
+    const cwd = std.Io.Dir.cwd();
 
-    var buf_dem = std.io.bufferedReader(dem.reader());
-    var buf_tas = std.io.bufferedWriter(tas.writer());
+    var demos = try cwd.openDir(io, "demos", .{ .iterate = true });
+    defer demos.close(io);
 
-    try convert(buf_dem.reader(), buf_tas.writer());
+    cwd.createDir(io, "tases", .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => |e| return e,
+    };
 
-    try buf_tas.flush();
+    var demo_iterator = demos.iterate();
+
+    while (try demo_iterator.next(io)) |demo| {
+        const demo_name = demo.name;
+        if (!std.mem.endsWith(u8, demo_name, ".dem")) continue;
+
+        const base_name = demo_name[0 .. demo_name.len - 4];
+
+        const tas_path = try std.fmt.allocPrint(gpa, "tases/{s}.p2tas", .{base_name});
+        defer gpa.free(tas_path);
+
+        var file = try demos.openFile(io, demo_name, .{});
+        defer file.close(io);
+
+        var read_buf: [1 << 12]u8 = undefined;
+        var file_reader = file.reader(io, &read_buf);
+        const reader = &file_reader.interface;
+
+        var output_file = try cwd.createFile(io, tas_path, .{});
+        defer output_file.close(io);
+
+        var write_buf: [1 << 12]u8 = undefined;
+        var file_writer = output_file.writer(io, &write_buf);
+        const writer = &file_writer.interface;
+
+        try convert(base_name, reader, writer);
+
+        try file_writer.flush();
+    }
 }

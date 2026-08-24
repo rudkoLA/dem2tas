@@ -1,4 +1,4 @@
 zig-out/
-zig-cache/
-demo.dem
-tas.p2tas
+.zig-cache/
+demos
+tases
