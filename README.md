@@ -24,6 +24,13 @@ zig build --release=fast
 ```
 if speed matters.
 
+The following can be used to build all three most common targets for a release:
+```sh
+zig build artifacts
+```
+which uses ReleaseSmall optimization mode.
+
+
 ## Usage
 
 Place all your demos inside a `./demos/` folder and run dem2tas in its parent folder. Then the resulting tases will be at `./tases/`
