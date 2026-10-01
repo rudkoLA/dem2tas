@@ -177,47 +177,63 @@ pub fn convert(file_name: []const u8, r: *std.Io.Reader, w: *std.Io.Writer) !voi
     }
 }
 
-pub fn main(init: std.process.Init) anyerror!void {
-    const gpa = init.gpa;
-    const io = init.io;
+fn convertFile(io: std.Io, cwd: std.Io.Dir, input_path: []const u8, output_path: []const u8) !void {
+    var file = try cwd.openFile(io, input_path, .{});
+    defer file.close(io);
 
+    var read_buf: [1 << 12]u8 = undefined;
+    var file_reader = file.reader(io, &read_buf);
+    const reader = &file_reader.interface;
+
+    var output_file = try cwd.createFile(io, output_path, .{});
+    defer output_file.close(io);
+
+    var write_buf: [1 << 12]u8 = undefined;
+    var file_writer = output_file.writer(io, &write_buf);
+    const writer = &file_writer.interface;
+
+    try convert(input_path[0..input_path.len-4], reader, writer);
+
+    try file_writer.flush();
+}
+
+pub fn main(init: std.process.Init) anyerror!void {
+    const arena = init.arena.allocator();
+    const io = init.io;
     const cwd = std.Io.Dir.cwd();
 
-    var demos = try cwd.openDir(io, "demos", .{ .iterate = true });
-    defer demos.close(io);
+    const args = try init.minimal.args.toSlice(arena);
 
-    cwd.createDir(io, "tases", .default_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => |e| return e,
-    };
+    if (args.len > 1) {
+        for (args[1..]) |arg| {
+            if (!std.mem.endsWith(u8, arg, ".dem")) continue;
 
-    var demo_iterator = demos.iterate();
+            const output_path = try std.fmt.allocPrint(arena, "{s}.p2tas", .{arg[0 .. arg.len - 4]});
 
-    while (try demo_iterator.next(io)) |demo| {
-        const demo_name = demo.name;
-        if (!std.mem.endsWith(u8, demo_name, ".dem")) continue;
+            try convertFile(io, cwd, arg, output_path);
+        }
+    } else {
+        cwd.createDir(io, "tases", .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
 
-        const base_name = demo_name[0 .. demo_name.len - 4];
+        var demos_dir = try cwd.openDir(io, "demos", .{ .iterate = true });
+        defer demos_dir.close(io);
 
-        const tas_path = try std.fmt.allocPrint(gpa, "tases/{s}.p2tas", .{base_name});
-        defer gpa.free(tas_path);
+        var demo_iterator = demos_dir.iterate();
 
-        var file = try demos.openFile(io, demo_name, .{});
-        defer file.close(io);
+        while (try demo_iterator.next(io)) |demo| {
+            const demo_name = demo.name;
 
-        var read_buf: [1 << 12]u8 = undefined;
-        var file_reader = file.reader(io, &read_buf);
-        const reader = &file_reader.interface;
+            if (!std.mem.endsWith(u8, demo_name, ".dem")) continue;
 
-        var output_file = try cwd.createFile(io, tas_path, .{});
-        defer output_file.close(io);
+            const demo_base = demo_name[0 .. demo_name.len - 4];
 
-        var write_buf: [1 << 12]u8 = undefined;
-        var file_writer = output_file.writer(io, &write_buf);
-        const writer = &file_writer.interface;
+            const input_path = try std.fmt.allocPrint(arena, "demos/{s}", .{demo_name});
+            const output_path = try std.fmt.allocPrint(arena, "tases/{s}.p2tas", .{demo_base});
 
-        try convert(base_name, reader, writer);
-
-        try file_writer.flush();
+            try convertFile(io, cwd, input_path, output_path);
+        }
     }
 }

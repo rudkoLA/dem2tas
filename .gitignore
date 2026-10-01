@@ -2,3 +2,5 @@ zig-out/
 .zig-cache/
 demos
 tases
+artifacts/
+.DS_Store
