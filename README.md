@@ -12,7 +12,7 @@ zig build
 
 The resulting binary will be placed at `zig-out/bin/dem2tas`.
 
-You can also instead do
+You can instead do
 ```sh
 zig build --release=small
 ```
